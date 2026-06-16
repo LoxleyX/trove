@@ -107,6 +107,13 @@ local COLORS = setmetatable({}, {
     end,
 });
 
+-- Reusable tables for menu popup (avoid per-frame allocations)
+local MENU_CATEGORY_ORDER = { 'Utility', 'Storage', 'Collections', 'Games', 'Account' };
+local menuByCategory   = {};
+local menuUncategorised = {};
+
+-- renderPluginEntry defined after renderIcon/renderFileIcon (forward ref)
+
 -- Cached alternating row backgrounds (rebuilt on theme change to avoid per-row allocations)
 local rowBgCache = { version = -1, alt = nil, normal = nil };
 local function getRowBg(isAlt)
@@ -528,6 +535,24 @@ local function renderFileImage(filename, w, h)
     return false;
 end
 
+-- Plugin menu entry renderer (defined once, avoids per-frame closure)
+local function renderPluginEntry(plugin)
+    local win = plugin.window;
+    if win.icon then
+        if type(win.icon) == 'string' then
+            renderFileIcon(win.icon, 16);
+        else
+            renderIcon(win.icon, 16);
+        end
+        imgui.SameLine(0, 6);
+    end
+    local label = win.label or plugin.name;
+    if plugin.hasAlert and plugin.hasAlert() then label = label .. ' (!)'; end
+    if imgui.Selectable(label, win.isOpen[1]) then
+        win.isOpen[1] = not win.isOpen[1];
+    end
+end
+
 -- Forward declarations for functions defined after pluginCtx
 local renderBadges;
 local renderItemDetail;
@@ -831,10 +856,18 @@ local function renderWindow()
         if imgui.BeginPopup('##trove_plugins_menu') then
             local winPlugins = trove_plugins.getWindowPlugins();
 
-            -- Group by category
-            local CATEGORY_ORDER = { 'Utility', 'Storage', 'Collections', 'Games', 'Account' };
-            local byCategory = {};
-            local uncategorised = {};
+            -- Group by category (reuse tables to avoid per-frame allocs)
+            local byCategory = menuByCategory;
+            local uncategorised = menuUncategorised;
+            -- Clear reused tables
+            for k, v in pairs(byCategory) do
+                if type(v) == 'table' then
+                    for i = #v, 1, -1 do v[i] = nil; end
+                else
+                    byCategory[k] = nil;
+                end
+            end
+            for i = #uncategorised, 1, -1 do uncategorised[i] = nil; end
 
             for _, plugin in ipairs(winPlugins) do
                 local cat = plugin.window.category;
@@ -848,24 +881,6 @@ local function renderWindow()
 
             -- Also gather menu-action plugins
             local menuEntries = trove_plugins.getMenuEntries();
-
-            local function renderPluginEntry(plugin)
-                local win = plugin.window;
-                if win.icon then
-                    if type(win.icon) == 'string' then
-                        renderFileIcon(win.icon, 16);
-                    else
-                        renderIcon(win.icon, 16);
-                    end
-                    imgui.SameLine(0, 6);
-                end
-                local label = win.label or plugin.name;
-                if plugin.hasAlert and plugin.hasAlert() then label = label .. ' (!)'; end
-                if imgui.Selectable(label, win.isOpen[1]) then
-                    win.isOpen[1] = not win.isOpen[1];
-                end
-            end
-
             local renderedAny = false;
 
             -- Render uncategorised first (if any)
@@ -875,7 +890,7 @@ local function renderWindow()
             end
 
             -- Render each category
-            for _, catName in ipairs(CATEGORY_ORDER) do
+            for _, catName in ipairs(MENU_CATEGORY_ORDER) do
                 local plugins = byCategory[catName];
                 if plugins and #plugins > 0 then
                     if renderedAny then imgui.Separator(); end

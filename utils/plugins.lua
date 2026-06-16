@@ -66,6 +66,21 @@ local function discoverPlugins()
 end
 
 ------------------------------------------------------------
+-- Cached results (rebuilt only on plugin load/unload)
+------------------------------------------------------------
+local cachedMenuEntries   = nil;
+local cachedWindowPlugins = nil;
+local cachedTopBarButtons = nil;
+local cacheVersion        = 0;
+
+local function invalidateCache()
+    cachedMenuEntries   = nil;
+    cachedWindowPlugins = nil;
+    cachedTopBarButtons = nil;
+    cacheVersion = cacheVersion + 1;
+end
+
+------------------------------------------------------------
 -- Load all plugins
 ------------------------------------------------------------
 plugins.load = function()
@@ -97,6 +112,7 @@ plugins.load = function()
     if #names > 0 then
         print(string.format('[trove] Plugins: %s', table.concat(names, ', ')));
     end
+    invalidateCache();
 end
 
 ------------------------------------------------------------
@@ -125,6 +141,7 @@ plugins.unload = function()
         end
     end
     loaded = {};
+    invalidateCache();
 end
 
 ------------------------------------------------------------
@@ -221,6 +238,7 @@ end
 -- window toggles from plugins with windows)
 ------------------------------------------------------------
 plugins.getMenuEntries = function()
+    if cachedMenuEntries then return cachedMenuEntries; end
     local entries = {};
     for _, entry in ipairs(loaded) do
         if entry.plugin.menu then
@@ -233,23 +251,29 @@ plugins.getMenuEntries = function()
             };
         end
     end
+    cachedMenuEntries = entries;
     return entries;
 end
 
 ------------------------------------------------------------
 -- Query status strips from plugins (for persistent status bar)
 ------------------------------------------------------------
+-- Status strips are dynamic (depend on registration state etc), but we can
+-- reuse the same table each frame instead of allocating new ones
+local statusStripBuf = {};
+
 plugins.getStatusStrips = function()
-    local strips = {};
+    -- Clear and reuse same table
+    for i = #statusStripBuf, 1, -1 do statusStripBuf[i] = nil; end
     for _, entry in ipairs(loaded) do
         if entry.plugin.getStatus then
             local ok, status = pcall(entry.plugin.getStatus);
             if ok and status then
-                strips[#strips + 1] = status;
+                statusStripBuf[#statusStripBuf + 1] = status;
             end
         end
     end
-    return strips;
+    return statusStripBuf;
 end
 
 ------------------------------------------------------------
@@ -295,14 +319,11 @@ end
 -- Called from trove.lua in the render loop.
 ------------------------------------------------------------
 plugins.renderWindows = function()
-    local ui = require('utils/ui');
     for _, entry in ipairs(loaded) do
         if entry.plugin.window then
             local win = entry.plugin.window;
             if win.isOpen[1] then
-                local ok, err = pcall(function()
-                    win.render();
-                end);
+                local ok, err = pcall(win.render);
                 if not ok then
                     print(string.format('[trove] Plugin %s window error: %s', entry.plugin.name, tostring(err)));
                 end
@@ -315,6 +336,7 @@ end
 -- Get plugins that have windows (for menu toggles)
 ------------------------------------------------------------
 plugins.getWindowPlugins = function()
+    if cachedWindowPlugins then return cachedWindowPlugins; end
     local top = {};
     local bottom = {};
     for _, entry in ipairs(loaded) do
@@ -326,26 +348,30 @@ plugins.getWindowPlugins = function()
             end
         end
     end
-    -- Bottom plugins get a separator before them
     if #bottom > 0 and #top > 0 then
         bottom[1]._menuSeparator = true;
     end
     for _, p in ipairs(bottom) do top[#top + 1] = p; end
+    cachedWindowPlugins = top;
     return top;
 end
 
 ------------------------------------------------------------
 -- Get top bar buttons from plugins
 ------------------------------------------------------------
+-- Top bar buttons: cached but also depend on isVisible() which is dynamic.
+-- Rebuild each frame but reuse the same table.
+local topBarBuf = {};
+
 plugins.getTopBarButtons = function()
-    local buttons = {};
+    for i = #topBarBuf, 1, -1 do topBarBuf[i] = nil; end
     for _, entry in ipairs(loaded) do
         local btn = entry.plugin.topBarButton;
         if btn and (not btn.isVisible or btn.isVisible()) then
-            buttons[#buttons + 1] = btn;
+            topBarBuf[#topBarBuf + 1] = btn;
         end
     end
-    return buttons;
+    return topBarBuf;
 end
 
 ------------------------------------------------------------
