@@ -38,6 +38,7 @@ local synthResultUntil   = 0;
 
 local searchBuf  = { '' };
 local searchSize = 32;
+local troveState = nil;  -- captured from first render/packet callback
 
 -- Client-side item name index for instant search
 local craftIndex     = nil;
@@ -123,6 +124,10 @@ local function requestRecipe(itemId, pushHistory)
     craftItemId    = itemId;
     craftRecipes   = {};
     craftLoaded    = false;
+
+    if troveState then
+        troveState.pendingRequest = 'crafting';
+    end
 
     local p = pkt.make();
     p[5] = pkt.C2S.GET_RECIPE;
@@ -475,6 +480,7 @@ end
 -- Render: main crafting tab
 ------------------------------------------------------------
 local function render(state)
+    if not troveState and state then troveState = state; end
     local COLORS = {
         dimmed  = ui.color('dimmed'),
         header  = ui.color('header'),
@@ -507,8 +513,8 @@ local function render(state)
 
     imgui.Spacing();
 
-    -- If we have a loaded recipe, show it
-    if craftLoaded and craftItemId > 0 then
+    -- If we have a loaded recipe (or are refreshing one), show it
+    if craftItemId > 0 and (craftLoaded or #craftRecipes > 0 or batchWithdrawCount > 0) then
         -- Back button
         if #craftHistory > 0 then
             imgui.PushStyleColor(ImGuiCol_Button, COLORS.btnBack);
@@ -608,27 +614,28 @@ local function render(state)
             local bg = getRowBg(isAlt);
 
             imgui.PushStyleColor(ImGuiCol_ChildBg, bg);
-            imgui.BeginChild(rowId, { -1, 26 }, false);
+            imgui.BeginChild(rowId, { -1, 26 }, false,
+                bit.bor(ImGuiWindowFlags_NoScrollbar, ImGuiWindowFlags_NoScrollWithMouse));
 
             imgui.SetCursorPos({ 4, 1 });
             if not renderIcon(entry.id, 24) then imgui.Dummy({ 24, 24 }); end
-            imgui.SameLine(32);
 
-            imgui.SetCursorPosY(0);
-            if imgui.Selectable(string.format('##csel_%d', entry.id), false,
-                ImGuiSelectableFlags_SpanAllColumns, { 0, 26 }) then
-                requestRecipe(entry.id);
-            end
-
+            local displayName = getItemName(entry.id) or entry.name;
             local dl = imgui.GetWindowDrawList();
             local wx, wy = imgui.GetWindowPos();
-            local displayName = getItemName(entry.id) or entry.name;
             dl:AddText({ wx + 32, wy + 6 }, imgui.GetColorU32(COLORS.white), ((displayName or ''):gsub('%%', '%%%%')));
-
-            if imgui.IsItemHovered() then renderTooltip({ id = entry.id, name = displayName or '', qty = 0 }); end
 
             imgui.EndChild();
             imgui.PopStyleColor(1);
+
+            -- Click detection on the child itself (not a Selectable inside it)
+            if imgui.IsItemClicked() then
+
+                requestRecipe(entry.id);
+            end
+            if imgui.IsItemHovered() then
+                renderTooltip({ id = entry.id, name = displayName or '', qty = 0 });
+            end
         end
     end
 
@@ -684,6 +691,7 @@ return {
     },
 
     onPacketIn = function(e, state)
+        if not troveState and state then troveState = state; end
         -- Handle synth result (0x06F)
         if e.id == 0x06F then
             local result = struct.unpack('B', e.data_modified, 0x04 + 1);
@@ -735,6 +743,7 @@ return {
         if e.id ~= pkt.PACKET_ID then return; end
         local action = struct.unpack('B', e.data_modified, 0x04 + 1);
 
+
         if action == pkt.S2C.RECIPE then
             local SKILL_NAMES = { 'Wood', 'Smith', 'Gold', 'Cloth', 'Leather', 'Bone', 'Alchemy', 'Cook' };
             local ingCount   = struct.unpack('B', e.data_modified, 0x05 + 1);
@@ -764,11 +773,11 @@ return {
 
             local ingredients = {};
             for i = 0, ingCount - 1 do
-                local off  = 0x26 + i * 8;
+                local off  = 0x26 + i * 9;
                 local iid  = pkt.readU16(e.data_modified, off);
                 local need = struct.unpack('B', e.data_modified, off + 2 + 1);
                 local inv  = pkt.readU16(e.data_modified, off + 3);
-                local ebx  = pkt.readU16(e.data_modified, off + 5);
+                local ebx  = pkt.readU32(e.data_modified, off + 5);
                 if iid > 0 then
                     ingredients[#ingredients + 1] = { id = iid, need = need, inv = inv, ebox = ebx };
                 end
