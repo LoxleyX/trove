@@ -362,6 +362,16 @@ local textureHandles    = {};  -- itemId|filename -> tonumber(uint32) for imgui.
 local textureLRU        = {};  -- LRU queue of item IDs for eviction
 local TEXTURE_CACHE_MAX = 512;
 
+-- Explicitly release a D3D texture: disarm the GC-release first, then
+-- call Release() ourselves so VRAM is freed immediately.
+local function releaseTexture(tex)
+    if tex == nil then return; end
+    pcall(function()
+        ffi.gc(tex, nil);   -- disarm GC Release
+        tex:Release();      -- immediate D3D Release
+    end);
+end
+
 local function loadItemTexture(itemId)
     if textureCache[itemId] ~= nil then return textureCache[itemId]; end
     if itemId == nil or itemId == 0 then textureCache[itemId] = false; return false; end
@@ -369,9 +379,10 @@ local function loadItemTexture(itemId)
     local item = getItemRes(itemId);
     if item == nil or item.ImageSize == 0 then textureCache[itemId] = false; return false; end
 
-    -- Evict oldest texture if cache is full
+    -- Evict oldest texture if cache is full — explicitly release D3D resource
     if #textureLRU >= TEXTURE_CACHE_MAX then
         local evict = table.remove(textureLRU, 1);
+        releaseTexture(textureCache[evict]);
         textureCache[evict]   = nil;
         textureHandles[evict] = nil;
     end
@@ -1014,6 +1025,15 @@ end);
 ashita.events.register('unload', 'trove_unload', function()
     trove_plugins.unload();
     AshitaCore:GetChatManager():QueueCommand(1, string.format('/unbind %s', KEYBIND));
+
+    -- Explicitly release all D3D textures (don't rely on GC)
+    for id, tex in pairs(textureCache) do
+        if tex and tex ~= false then releaseTexture(tex); end
+    end
+    for name, tex in pairs(fileTextures) do
+        if tex and tex ~= false then releaseTexture(tex); end
+    end
+
     textureCache   = {};
     fileTextures   = {};
     textureHandles = {};
