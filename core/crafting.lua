@@ -36,9 +36,10 @@ local synthResultMsg     = '';
 local synthResultIsErr   = false;
 local synthResultUntil   = 0;
 
-local searchBuf  = { '' };
-local searchSize = 32;
-local troveState = nil;  -- captured from first render/packet callback
+local searchBuf    = { '' };
+local searchSize   = 32;
+local showDesynth  = { false };  -- unchecked by default
+local troveState   = nil;  -- captured from first render/packet callback
 
 -- Client-side item name index for instant search
 local craftIndex     = nil;
@@ -576,16 +577,31 @@ local function render(state)
         imgui.PushStyleColor(ImGuiCol_ChildBg, COLORS.windowBg);
         imgui.BeginChild('##craft_scroll', { -1, -1 }, false);
 
-        if #craftRecipes == 0 then
-            imgui.Spacing(); imgui.Spacing();
-            imgui.TextColored(COLORS.dimmed, 'No crafting recipes found for this item.');
-        else
-            local shown = 0;
-            for i, recipe in ipairs(craftRecipes) do
+        -- Filter desynths if checkbox unchecked
+        local hasDesynth = false;
+        local hasSynth   = false;
+        for _, recipe in ipairs(craftRecipes) do
+            if recipe.desynth then hasDesynth = true; else hasSynth = true; end
+        end
+
+        -- Show checkbox only if there are desynths to hide
+        if hasDesynth then
+            imgui.Checkbox('Show desynth', showDesynth);
+            imgui.Spacing();
+        end
+
+        local shown = 0;
+        for i, recipe in ipairs(craftRecipes) do
+            if not recipe.desynth or showDesynth[1] then
                 if shown > 0 then imgui.Spacing(); imgui.Separator(); imgui.Spacing(); end
                 renderRecipe(recipe, i);
                 shown = shown + 1;
             end
+        end
+
+        if shown == 0 then
+            imgui.Spacing(); imgui.Spacing();
+            imgui.TextColored(COLORS.dimmed, 'No crafting recipes found for this item.');
         end
 
         imgui.EndChild();
